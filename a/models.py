@@ -49,7 +49,7 @@ class VAE(pl.LightningModule):
 
         z = distribution.rsample()
 
-        return self.images(z), mu, logvar
+        return self.decode(z), mu, logvar
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
         ...
@@ -74,9 +74,10 @@ class VAE(pl.LightningModule):
         y, mu, logvar = self(x)
 
         self.loss(x, y, mu, logvar, prefix="val")
+        y = self.mean(y)
 
         z, _ = self.encode(x.view(-1, 784))
-        scatter = plt.scatter(z[:, 1], -z[:, 0], c=l, cmap="tab10", s=2, alpha=0.7)
+        scatter = plt.scatter(z[:, 1].cpu(), -z[:, 0].cpu(), c=l.cpu(), cmap="tab10", s=2, alpha=0.7)
         plt.legend(*scatter.legend_elements(), loc="upper right")
 
         if batch_index == 0:
@@ -92,7 +93,7 @@ class VAE(pl.LightningModule):
 
             k = 12
             eps = 1e-5
-            us = torch.linspace(eps, 1 - eps, k)
+            us = torch.linspace(eps, 1 - eps, k, device=self.device)
             xs = torch.distributions.normal.Normal(0, 1).icdf(us)
             samples = torch.dstack(torch.meshgrid(xs, xs, indexing="ij")).reshape(-1, 2)
             images = self.images(samples)
@@ -178,11 +179,13 @@ class VAEBeta(VAE):
         return b.mean
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
-        bce = self.bce(y, x.view(-1, 784))
+        alpha, beta = y
+        b = torch.distributions.Beta(alpha, beta)
+        ll = b.log_prob(torch.clip(x.view(-1, 784), 1e-2, 1 - 1e-2)).sum()
         kld = -0.5 * torch.sum(1 + logvar - mu**2 - torch.exp(logvar))
-        loss = bce + kld
+        loss = -ll + kld
 
-        self.log(f"{prefix}_bce", bce)
+        self.log(f"{prefix}_ll", ll)
         self.log(f"{prefix}_kld", kld)
         self.log(f"{prefix}_loss", loss)
 
