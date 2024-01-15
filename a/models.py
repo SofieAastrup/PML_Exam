@@ -166,11 +166,12 @@ class VAEBeta(VAE):
         self.decoder_2b = torch.nn.Linear(
             self.decoder_2.in_features, self.decoder_2.out_features
         )
+        self.positive = torch.nn.Sigmoid()
 
     def decode(self, x):
         h = self.activation(self.decoder_1(x))
-        alpha = torch.sigmoid(self.decoder_2(h))
-        beta = torch.sigmoid(self.decoder_2b(h))
+        alpha = self.softplus(self.decoder_2(h))
+        beta = self.softplus(self.decoder_2b(h))
         return alpha, beta
 
     def mean(self, x):
