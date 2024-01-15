@@ -146,14 +146,13 @@ class VAEContinuousBernoulli(VAE):
             return x
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
-        bce = self.bce(y, x.view(-1, 784))
-        kld = -0.5 * torch.sum(1 + logvar - mu**2 - torch.exp(logvar))
         cb = torch.distributions.ContinuousBernoulli(y)
-        loss = bce + kld + cb._cont_bern_log_norm().sum()
+        ll = cb.log_prob(x.view(-1, 784)).sum()
+        kld = -0.5 * torch.sum(1 + logvar - mu**2 - torch.exp(logvar))
+        loss = -ll + kld
 
-        self.log(f"{prefix}_bce", bce)
+        self.log(f"{prefix}_ll", ll)
         self.log(f"{prefix}_kld", kld)
-        self.log(f"{prefix}_cb_norm", cb._cont_bern_log_norm().sum())
         self.log(f"{prefix}_loss", loss)
 
         return loss
