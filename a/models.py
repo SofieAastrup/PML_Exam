@@ -1,3 +1,4 @@
+import math
 import os
 import os.path
 
@@ -25,7 +26,7 @@ class VAE(pl.LightningModule):
         self.decoder_2 = torch.nn.Linear(400, 784)
 
         self.activation = torch.nn.ReLU()
-        self.bce = torch.nn.BCELoss(reduction="sum")
+        self.bce = torch.nn.BCELoss(reduction='none')
 
         self._image_dir = None
 
@@ -37,11 +38,41 @@ class VAE(pl.LightningModule):
         h = self.activation(self.decoder_1(x))
         return torch.sigmoid(self.decoder_2(h))
 
+    def likelihood(self, x, parameters):
+        ...
+
     def mean(self, x):
         ...
 
     def images(self, x):
         return self.mean(self.decode(x))
+
+    def sample_likelihood(self, x, n: int = 1000, importance: bool = True):
+        if importance:
+            sum = torch.empty(0, device=self.device)
+            mu, logvar = self.encode(x.view(-1, 784))
+            q = torch.distributions.Normal(mu, torch.exp(0.5 * logvar))
+            p = torch.distributions.Normal(torch.tensor(0., device=self.device), torch.tensor(1., device=self.device))
+            for i in range(math.ceil(n / 100_000)):
+                k = min(n - i * 100_000, 100_000)
+                samples = q.sample((k, )).squeeze()
+                decoded = self.decode(samples)
+                ll = self.likelihood(x.view(-1, 784), decoded).sum(dim=1)
+                sum = torch.concat((sum, p.log_prob(samples).sum(dim=1) - q.log_prob(samples).sum(dim=1) + ll))
+            return torch.logsumexp(sum, dim=0) - torch.log(torch.tensor(n))
+        else:
+            # sum = 0
+            sum = torch.empty(0, device=self.device)
+            d = torch.distributions.Normal(torch.tensor(0., device=self.device), torch.tensor(1., device=self.device))
+            for i in range(math.ceil(n / 100_000)):
+                k = min(n - i * 100_000, 100_000)
+                samples = d.sample((k, 2))
+                decoded = self.decode(samples)
+                q = self.likelihood(x.view(-1, 784), decoded)
+                # sum += torch.sum(q.sum(dim=1))
+                sum = torch.concat((sum, q.sum(dim=1)))
+            # return sum / n
+            return torch.logsumexp(sum, dim=0) - torch.log(torch.tensor(n))
 
     def forward(self, x):
         mu, logvar = self.encode(x.view(-1, 784))
@@ -117,11 +148,14 @@ class VAE(pl.LightningModule):
 
 
 class VAEBernoulli(VAE):
+    def likelihood(self, x, parameters):
+        return self.bce(parameters, x.view(-1, 784))
+
     def mean(self, x):
         return x
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
-        bce = self.bce(y, x.view(-1, 784))
+        bce = self.likelihood(x.view(-1, 784), y).sum()
         kld = -0.5 * torch.sum(1 + logvar - mu**2 - torch.exp(logvar))
         loss = bce + kld
 
@@ -137,6 +171,10 @@ class VAEContinuousBernoulli(VAE):
         super().__init__()
 
         self.use_mean = use_mean
+    
+    def likelihood(self, x, parameters):
+        cb = torch.distributions.ContinuousBernoulli(parameters)
+        return cb.log_prob(x)
 
     def mean(self, x):
         if self.use_mean:
@@ -146,8 +184,7 @@ class VAEContinuousBernoulli(VAE):
             return x
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
-        cb = torch.distributions.ContinuousBernoulli(y)
-        ll = cb.log_prob(x.view(-1, 784)).sum()
+        ll = self.likelihood(x.view(-1, 784), y).sum()
         kld = -0.5 * torch.sum(1 + logvar - mu**2 - torch.exp(logvar))
         loss = -ll + kld
 
@@ -169,9 +206,14 @@ class VAEBeta(VAE):
 
     def decode(self, x):
         h = self.activation(self.decoder_1(x))
-        alpha = self.softplus(self.decoder_2(h))
-        beta = self.softplus(self.decoder_2b(h))
+        alpha = self.positive(self.decoder_2(h))
+        beta = self.positive(self.decoder_2b(h))
         return alpha, beta
+    
+    def likelihood(self, x, parameters):
+        alpha, beta = parameters
+        b = torch.distributions.Beta(alpha, beta)
+        return b.log_prob(x).sum()
 
     def mean(self, x):
         alpha, beta = x
@@ -179,9 +221,7 @@ class VAEBeta(VAE):
         return b.mean
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
-        alpha, beta = y
-        b = torch.distributions.Beta(alpha, beta)
-        ll = b.log_prob(torch.clip(x.view(-1, 784), 1e-2, 1 - 1e-2)).sum()
+        ll = self.likelihood(torch.clip(x.view(-1, 784), 1e-2, 1 - 1e-2), y)
         kld = -0.5 * torch.sum(1 + logvar - mu**2 - torch.exp(logvar))
         loss = -ll + kld
 
