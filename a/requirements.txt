@@ -1,0 +1,6 @@
+selector @ git+https://github.com/nickeopti/selector.git
+torch
+torchvision
+matplotlib
+numpy
+pytorch-lightning<2
