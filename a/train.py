@@ -14,27 +14,42 @@ import models
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser = pl.Trainer.add_argparse_args(parser)
+    parser.add_argument('--flip', type=bool, default=False)
+    args, _ = parser.parse_known_args()
+
+    train_dataset = torchvision.datasets.MNIST(
+        "data",
+        train=True,
+        download=True,
+        transform=torchvision.transforms.ToTensor(),
+    )
+    if args.flip:
+        for i, (image, label) in enumerate(train_dataset):
+            if label == 1 or label == 7:
+                train_dataset.data[i] = ((1 - image) * 255).type(torch.uint8)
 
     train_data_loader = selector.add_arguments(
         parser, "train_data", torch.utils.data.DataLoader
     )(
-        dataset=torchvision.datasets.MNIST(
-            "data",
-            train=True,
-            download=True,
-            transform=torchvision.transforms.ToTensor(),
-        ),
+        train_dataset,
         shuffle=True,
     )
+
+    test_dataset = torchvision.datasets.MNIST(
+        "data",
+        train=False,
+        download=True,
+        transform=torchvision.transforms.ToTensor(),
+    )
+    if args.flip:
+        for i, (image, label) in enumerate(test_dataset):
+            if label == 1 or label == 7:
+                test_dataset.data[i] = ((1 - image) * 255).type(torch.uint8)
+
     test_data_loader = selector.add_arguments(
         parser, "test_data", torch.utils.data.DataLoader
     )(
-        dataset=torchvision.datasets.MNIST(
-            "data",
-            train=False,
-            download=True,
-            transform=torchvision.transforms.ToTensor(),
-        ),
+        test_dataset,
         shuffle=False,
     )
 

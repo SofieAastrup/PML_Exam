@@ -37,9 +37,10 @@ if __name__ == "__main__":
     #     shuffle=False,
     # )
 
-    k = 10
+    k = 14
     print(dataset[k][1])
     x = dataset[k][0].to(model.device).reshape(-1, 784)
+    x = 1 - x
     # x = torch.zeros(1, 784, device=model.device)
     with torch.no_grad():
         print(model.sample_likelihood(x, n = args.n, importance=False))
