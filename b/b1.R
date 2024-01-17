@@ -71,32 +71,40 @@ lls <- grid |>
   mutate(
     ll = ({
       # kernel <- \(x, x_) linear_kernel(x, x_, 2.45, 0.58) + periodic_kernel(x, x_, 4, period, 1)
-      kernel <- \(x, x_) periodic_kernel(x, x_, 2.729, period, 0.326)
-      log_likelihood(xs_train, ys_train, kernel, noise)[1, 1] #+ log(dlnorm(period - 1, 8, 1))
+      # kernel <- \(x, x_) periodic_kernel(x, x_, 2.729, period, 0.326)
+      kernel <- \(x, x_) periodic_kernel(x, x_, 5, period, 0.2) + linear_kernel(x, x_, 1.3, 0.5)
+      # kernel <- \(x, x_) periodic_kernel(x, x_, 2.37, period, 0.2) + linear_kernel(x, x_, 3, 3)
+      # kernel <- \(x, x_) periodic_kernel(x, x_, 6.5855, period, 4.1787) + linear_kernel(x, x_, -0.3467, 0.5012)
+      log_likelihood(xs_train, ys_train, kernel, noise)[1, 1] + log(dlnorm(period, 0.1, 100)) + log(dlnorm(noise, 0.01, 100))
     })
   )
 
 lls |> ggplot() +
   aes(x = period, y = noise, z = ll, colour = after_stat(level)) +
   coord_cartesian(expand = FALSE) +
-  geom_contour(bins = 100, show.legend = TRUE) +
+  geom_contour(bins = 100, show.legend = FALSE) +
   scale_x_log10() +
   scale_y_log10()
 
 # MAP estimate (according to grid search)
-lls[which.max(lls$ll), ]
+map_estimate <- lls[which.max(lls$ll), ]
 
 # plot prior
-plot(\(x) log(dnorm(x - 1, 8, 1)), 1, 15)
+plot(\(x) log(dlnorm(x, 0.1, 100)), 0, 10)
+plot(\(x) log(dlnorm(x, 0.01, 10)), 0, 5)
 
 # plot posterior predictive
-xs <- seq(0, 1, length.out = 100)
+xs <- seq(0, 1.5, length.out = 100)
 mu_sigma <- pp(
   xs,
   xs_train,
   ys_train,
-  \(x, x_) periodic_kernel(x, x_, 2.729, 16.3, 0.326),
-  sqrt(0.142)
+  # \(x, x_) periodic_kernel(x, x_, 2.729, 16.3, 0.326),
+  # \(x, x_) periodic_kernel(x, x_, 2.729, 1.38, 0.326) + linear_kernel(x, x_, 1.3, 2),
+  \(x, x_) periodic_kernel(x, x_, 5, map_estimate$period, 0.2), #+ linear_kernel(x, x_, 1.3, 0.5),
+  # \(x, x_) periodic_kernel(x, x_, 6.5855, 1.5399, 4.1787) + linear_kernel(x, x_, -0.3467, 0.5012),
+  sqrt(map_estimate$noise)
+  # sqrt(0.142)
 )
 
 mu <- mu_sigma[[1]]
@@ -106,3 +114,5 @@ ggplot() +
   geom_ribbon(aes(x = xs, ymin = mu - 1.96 * sqrt(diag(sigma)), ymax = mu + 1.96 * sqrt(diag(sigma))), alpha = 0.3) +
   geom_line(aes(x = xs, y = g(xs)), alpha = 0.5) +
   geom_point(aes(x = xs_train, y = ys_train))
+
+ggsave('prior_small_noise.png', width = 20, height = 8, units = "cm", dpi = 600)
