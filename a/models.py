@@ -351,7 +351,7 @@ class MyUNet(pl.LightningModule):
 
     def forward(self, x, t):
         # x is (N, 2, 28, 28) (image with positional embedding stacked on channel dimension)
-        t = self.time_embed(t)
+        t = self.time_embed(t.to(self.device))
         n = len(x)
         out1 = self.b1(x + self.te1(t).reshape(n, -1, 1, 1))  # (N, 10, 28, 28)
         out2 = self.b2(self.down1(out1) + self.te2(t).reshape(n, -1, 1, 1))  # (N, 20, 14, 14)
@@ -507,26 +507,39 @@ class Diffusion(pl.LightningModule):
         super().__init__()
 
         self.net = torch.nn.Sequential(
-            torch.nn.Conv2d(1, 8, kernel_size=7, padding=3),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(8, 64, kernel_size=3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(64, 8, kernel_size=3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(8, 1, kernel_size=3, padding=1),
+            torch.nn.Conv2d(1, 8, kernel_size=3, padding=1),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(8, 16, kernel_size=3, padding=1),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(16, 32, kernel_size=5, padding=2),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(32, 64, kernel_size=7, padding=3),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(64, 64, kernel_size=9, padding=4),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(64, 32, kernel_size=7, padding=3),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(32, 16, kernel_size=5, padding=2),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(16, 8, kernel_size=3, padding=1),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(8, 4, kernel_size=3, padding=1),
+            torch.nn.ELU(),
+            torch.nn.Conv2d(4, 1, kernel_size=1, padding=0),
         )
 
         self.time = torch.nn.Sequential(
             torch.nn.Linear(4, 32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(32, 784),
-            torch.nn.ReLU(),
+            torch.nn.ELU(),
+            torch.nn.Linear(32, 256),
+            torch.nn.ELU(),
+            torch.nn.Linear(256, 784),
+            torch.nn.ELU(),
         )
 
         self.T = T
-        self.betas = 0.005 * torch.ones(self.T)
+        # self.betas = 0.02 * torch.ones(self.T)
+        self.betas = torch.linspace(0.005, 0.02, T)
         # self.betas = torch.linspace(1e-4, 2e-2, T)
 
         self.activation = torch.nn.ReLU()
@@ -549,7 +562,6 @@ class Diffusion(pl.LightningModule):
         zs = xs + self.time(ts_embedding).reshape(-1, 1, 28, 28)
         zs = self.net(zs)
 
-        print(zs.shape)
         return zs
 
     def training_step(self, batch, _):
@@ -572,13 +584,6 @@ class Diffusion(pl.LightningModule):
     def mu(self, xt, t):
         factor = 1 / torch.sqrt(1 - self.betas[t])
         alpha_bar_t = torch.prod(1 - self.betas[:t])
-        #print(t) val
-        #print(factor.shape) empty
-        #print(alpha_bar_t.shape) empty
-        print("factor",factor.shape)
-        print("alpha_bar_t",alpha_bar_t.shape)
-        print("t",t)
-        print("xt",xt.shape)
         return factor * (xt - self.betas[t] / torch.sqrt(1 - alpha_bar_t) * self(xt, torch.tensor([t])))
 
     def generate_samples(self, n):
@@ -588,13 +593,13 @@ class Diffusion(pl.LightningModule):
             for t in range(self.T, 1, -1):
                 xs = torch.normal(self.mu(xs, t - 1), torch.sqrt(self.betas[-1]).to(self.device))
 
-        return xs
+        return torch.clip(xs, 0, 1)
     
     def validation_step(self, batch, batch_index):
-        if self.trainer.current_epoch % 10 == 0 and batch_index == 0:
+        if self.trainer.current_epoch == 0:
             xs, _ = batch
             xs = xs[0].unsqueeze(0)
-            ts = torch.tensor([0, 5, 10, 20, 40, 100, 250, 500, 800]).to(self.device)
+            ts = torch.tensor([0, 1, 3, 5, 10, 20, 50, 75, 100]).to(self.device)
             epsilons = torch.normal(0, 1, xs.shape, device=self.device)
 
             alpha_bar_ts = torch.tensor(
@@ -606,12 +611,12 @@ class Diffusion(pl.LightningModule):
             torchvision.utils.save_image(
                 xts.cpu(),
                 os.path.join(
-                    self.image_dir, f"noises_{self.trainer.current_epoch}.png"
+                    self.image_dir, f"noises_{batch_index}.png"
                 ),
                 nrow=3,
             )
 
-
+        if self.trainer.current_epoch % 10 == 0 and batch_index == 0:
             samples = self.generate_samples(16)
             torchvision.utils.save_image(
                 samples.cpu(),
