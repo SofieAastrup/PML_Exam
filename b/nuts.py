@@ -110,7 +110,7 @@ def compute_estimate(xs_train, ys_train, xs_test, ys_test):
 
     ###NUTS sampling
     nuts_kernel = pyro.infer.NUTS(model, jit_compile=False)
-    mcmc = pyro.infer.MCMC(nuts_kernel, num_samples=500, num_chains=5, warmup_steps=2000, mp_context='fork')
+    mcmc = pyro.infer.MCMC(nuts_kernel, num_samples=500, num_chains=5, warmup_steps=200, mp_context='fork')
     mcmc.run()
 
     data = arviz.from_pyro(mcmc)
