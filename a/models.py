@@ -1,8 +1,10 @@
 import math
 import os
 import os.path
+from typing import Any
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.distributions
@@ -230,3 +232,119 @@ class VAEBeta(VAE):
         self.log(f"{prefix}_loss", loss)
 
         return loss
+
+
+class Diffusion(pl.LightningModule):
+    def __init__(self, T: int) -> None:
+        super().__init__()
+
+        self.net = torch.nn.Sequential(
+            torch.nn.Conv2d(1, 8, kernel_size=7, padding=3),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(8, 64, kernel_size=3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(64, 8, kernel_size=3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(8, 1, kernel_size=3, padding=1),
+        )
+
+        self.time = torch.nn.Sequential(
+            torch.nn.Linear(4, 32),
+            torch.nn.ReLU(),
+            torch.nn.Linear(32, 784),
+            torch.nn.ReLU(),
+        )
+
+        self.T = T
+        self.betas = 0.005 * torch.ones(self.T)
+        # self.betas = torch.linspace(1e-4, 2e-2, T)
+
+        self.activation = torch.nn.ReLU()
+
+        self.omegas = 2 * math.pi * torch.tensor([1, 2, 4, 8]).reshape(1, -1) / self.T
+
+        self._image_dir = None
+    
+    @property
+    def image_dir(self):
+        if self._image_dir is None:
+            self._image_dir = os.path.join(self.logger.log_dir, "figures")
+            os.makedirs(self._image_dir, exist_ok=True)
+
+        return self._image_dir
+
+    def forward(self, xs, ts):
+        ts_embedding = torch.cos(self.omegas.to(self.device) * ts.reshape(-1, 1).to(self.device))
+
+        zs = xs + self.time(ts_embedding).reshape(-1, 1, 28, 28)
+        zs = self.net(zs)
+
+        return zs
+
+    def training_step(self, batch, _):
+        xs, _ = batch
+        ts = torch.from_numpy(np.random.choice(self.T, xs.shape[0])).to(self.device)
+        epsilons = torch.normal(0, 1, xs.shape, device=self.device)
+
+        alpha_bar_ts = torch.tensor(
+            [torch.prod(1 - self.betas[:t]) for t in ts],
+            device=self.device
+        ).reshape(-1, 1, 1, 1).repeat(1, 1, 28, 28)
+        
+        xts = torch.sqrt(alpha_bar_ts) * xs + torch.sqrt(1 - alpha_bar_ts) * epsilons
+        
+        error = ((epsilons - self(xts, ts))**2).sum(axis=-1).sum(-1).sum(-1).mean()
+        self.log('error', error)
+
+        return error
+
+    def mu(self, xt, t):
+        factor = 1 / torch.sqrt(1 - self.betas[t])
+        alpha_bar_t = torch.prod(1 - self.betas[:t])
+
+        return factor * (xt - self.betas[t] / torch.sqrt(1 - alpha_bar_t) * self(xt, torch.tensor([t])))
+
+    def generate_samples(self, n):
+        with torch.no_grad():
+            xs = torch.normal(0, 1, size=(n, 1, 28, 28), dtype=torch.float32, device=self.device)
+
+            for t in range(self.T, 1, -1):
+                xs = torch.normal(self.mu(xs, t - 1), torch.sqrt(self.betas[-1]).to(self.device))
+
+        return xs
+    
+    def validation_step(self, batch, batch_index):
+        if self.trainer.current_epoch % 10 == 0 and batch_index == 0:
+            xs, _ = batch
+            xs = xs[0].unsqueeze(0)
+            ts = torch.tensor([0, 5, 10, 20, 40, 100, 250, 500, 800]).to(self.device)
+            epsilons = torch.normal(0, 1, xs.shape, device=self.device)
+
+            alpha_bar_ts = torch.tensor(
+                [torch.prod(1 - self.betas[:t]) for t in ts],
+                device=self.device
+            ).reshape(-1, 1, 1, 1).repeat(1, 1, 28, 28)
+            
+            xts = torch.sqrt(alpha_bar_ts) * xs + torch.sqrt(1 - alpha_bar_ts) * epsilons
+            torchvision.utils.save_image(
+                xts.cpu(),
+                os.path.join(
+                    self.image_dir, f"noises_{self.trainer.current_epoch}.png"
+                ),
+                nrow=3,
+            )
+
+
+            samples = self.generate_samples(16)
+            torchvision.utils.save_image(
+                samples.cpu(),
+                os.path.join(
+                    self.image_dir, f"samples_{self.trainer.current_epoch}.png"
+                ),
+                nrow=4,
+            )
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-3)
