@@ -58,15 +58,15 @@ def posterior_predictive(x_predict, x, y, kernel, noise):
     return mu, Sigma
 
 
-a = torch.tensor(1.3, requires_grad=False)
-b = torch.tensor(0.5, requires_grad=False)
-v = torch.tensor(5., requires_grad=False)
-l = torch.tensor(0.2, requires_grad=False)
+a = torch.tensor(1.88, requires_grad=False)
+b = torch.tensor(1.05, requires_grad=False)
+v = torch.tensor(1.5, requires_grad=False)
+l = torch.tensor(4, requires_grad=False)
 
 
 def model():
-    period = 10**pyro.sample("period", pdist.Uniform(0, 2))
-    noise = 10**pyro.sample("noise", pdist.Uniform(-2, 1))
+    period = pyro.sample("period", pdist.LogNormal(-0.7, 0.96))
+    noise = pyro.sample("noise", pdist.LogNormal(-2.3, 0.1))
     # period = pyro.sample("period", pdist.LogNormal(0.1, 10))
     # noise = pyro.sample("noise", pdist.LogNormal(-3, 1.5))
 
@@ -110,7 +110,7 @@ def compute_estimate(xs_train, ys_train, xs_test, ys_test):
 
     ###NUTS sampling
     nuts_kernel = pyro.infer.NUTS(model, jit_compile=False)
-    mcmc = pyro.infer.MCMC(nuts_kernel, num_samples=500, num_chains=5, warmup_steps=200, mp_context='fork')
+    mcmc = pyro.infer.MCMC(nuts_kernel, num_samples=100, num_chains=5, warmup_steps=200, mp_context='fork')
     mcmc.run()
 
     data = arviz.from_pyro(mcmc)
@@ -121,7 +121,7 @@ def compute_estimate(xs_train, ys_train, xs_test, ys_test):
     samples = mcmc.get_samples()
 
     plt.figure()
-    plt.scatter(10**samples['period'], 10**samples['noise'])
+    plt.scatter(samples['period'], samples['noise'])
     plt.xscale('log')
     plt.yscale('log')
     plt.savefig('scatter.png', dpi=600)
