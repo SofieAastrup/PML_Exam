@@ -129,8 +129,8 @@ def compute_estimate(xs_train, ys_train, xs_test, ys_test):
 
     log_probs = []
     for period, noise in zip(samples['period'], samples['noise']):
-        kernel = lambda x, x_: linear_kernel(x, x_, a, b) + periodic_kernel(x, x_, v, 10**period, l)
-        mu, sigma = posterior_predictive(xs_test, xs_train, ys_train, kernel, 10**noise)
+        kernel = lambda x, x_: linear_kernel(x, x_, a, b) + periodic_kernel(x, x_, v, period, l)
+        mu, sigma = posterior_predictive(xs_test, xs_train, ys_train, kernel, noise)
 
         log_prob = torch.distributions.Normal(mu, torch.sqrt(torch.diag(sigma))).log_prob(ys_test).sum()
         log_probs.append(log_prob)
@@ -141,7 +141,7 @@ def compute_estimate(xs_train, ys_train, xs_test, ys_test):
 
 glps = []
 nlps = []
-for _ in range(1):
+for _ in range(20):
     l = 30
     n = 20
     xs = torch.arange(l) / (l - 1)
@@ -163,6 +163,9 @@ for _ in range(1):
     
     glps.append(grid_log_prob)
     nlps.append(nuts_log_prob)
+
+with open('data.pickle', 'wb') as f:
+    pickle.dump({'glps': glps, 'nlps': nlps}, f)
 
 print(np.mean(np.array(glps)))
 print(np.mean(np.array(nlps)))
