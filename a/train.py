@@ -19,17 +19,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser = pl.Trainer.add_argparse_args(parser)
     parser.add_argument('--flip', type=bool, default=False)
-    parser.add_argument('--normalise', type=bool, default=False)
     args, _ = parser.parse_known_args()
 
     train_dataset = torchvision.datasets.MNIST(
         "data",
         train=True,
         download=True,
-        transform=torchvision.transforms.Compose([
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Lambda(f)
-            ]) if args.normalise else torchvision.transforms.ToTensor(),
+        transform=torchvision.transforms.ToTensor(),
     )
     if args.flip:
         for i, (image, label) in enumerate(train_dataset):
@@ -47,10 +43,7 @@ if __name__ == "__main__":
         "data",
         train=False,
         download=True,
-        transform=torchvision.transforms.Compose([
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Lambda(f) 
-            ]) if args.normalise else torchvision.transforms.ToTensor(),
+        transform=torchvision.transforms.ToTensor(),
     )
     if args.flip:
         for i, (image, label) in enumerate(test_dataset):
