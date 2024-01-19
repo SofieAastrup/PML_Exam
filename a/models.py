@@ -100,7 +100,6 @@ class VAE(pl.LightningModule):
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
         ...
-
     def training_step(self, batch, _):
         x, _ = batch
         y, mu, logvar = self(x)
@@ -116,12 +115,15 @@ class VAE(pl.LightningModule):
 
         return self._image_dir
 
+    def generate_samples(self,n):
+        ...
+
     def validation_step(self, batch, batch_index):
         x, l = batch
-        y, mu, logvar = self(x)
+        p, mu, logvar = self(x)
 
-        self.loss(x, y, mu, logvar, prefix="val")
-        y = self.mean(y)
+        self.loss(x, p, mu, logvar, prefix="val")
+        y = self.mean(p)
 
         z, *_ = self.encode(x.view(-1, 784))
         scatter = plt.scatter(
@@ -131,7 +133,11 @@ class VAE(pl.LightningModule):
 
         if batch_index == 0:
             n = min(x.shape[0], 8)
-            comparison = torch.cat((x[:n], y.view(-1, 1, 28, 28)[:n]))
+            comparison = torch.cat((
+                x[:n],
+                y.view(-1, 1, 28, 28)[:n],
+                self.generate_samples(p).view(-1, 1, 28, 28)[:n]
+            ))
             torchvision.utils.save_image(
                 comparison.cpu(),
                 os.path.join(
@@ -292,12 +298,17 @@ class LVAE(VAE):
         else:
             return x
 
-    def loss(self, x, *args, prefix: str = "train"):
+    def generate_samples(self, x):
+        return torch.distributions.Bernoulli(torch.sigmoid(self.mean(x))).sample()
+
+    def loss(self, x, *args, prefix: str = 'train'):
         beta = 0.1
         nelbo, _, _, decoded_bernoulli_logits = self.negative_elbo_bound(x, beta)
         loss = nelbo
 
         return loss, decoded_bernoulli_logits
+
+    
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3)
@@ -309,6 +320,9 @@ class VAEBernoulli(VAE):
 
     def mean(self, x):
         return x
+
+    def generate_samples(self, x):
+        return torch.distributions.Bernoulli(x).sample()
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
         bce = self.likelihood(x.view(-1, 784), y).sum()
@@ -338,6 +352,10 @@ class VAEContinuousBernoulli(VAE):
             return cb.mean
         else:
             return x
+
+    def generate_samples(self, x):
+        return torch.distributions.ContinuousBernoulli(x).sample()
+
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
         ll = self.likelihood(x.view(-1, 784), y).sum()
@@ -375,6 +393,10 @@ class VAEBeta(VAE):
         alpha, beta = x
         b = torch.distributions.Beta(alpha, beta)
         return b.mean
+    
+    def generate_samples(self, x):
+        alpha, beta = x
+        return torch.distributions.Beta(alpha, beta).sample()
 
     def loss(self, x, y, mu, logvar, prefix: str = "train"):
         ll = self.likelihood(torch.clip(x.view(-1, 784), 1e-2, 1 - 1e-2), y)
