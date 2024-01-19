@@ -14,6 +14,7 @@ import torchvision
 import torchvision.datasets
 import torchvision.transforms
 import torchvision.utils
+from torch.nn import functional as F
 
 
 class VAE(pl.LightningModule):
@@ -147,6 +148,119 @@ class VAE(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3)
+    
+class MLP(nn.Module):
+    def __init__(self, in_dim, out_dim, latent_dim):
+        super().__init__()
+        latent_dim = 2
+        #network
+        self.fc1 = nn.Linear(in_dim, out_dim)
+        self.fc2 = nn.Linear(out_dim, out_dim)
+
+        #mean and variance layers
+        self.fc31 = nn.Linear(out_dim, latent_dim)
+        self.fc32 = nn.Linear(out_dim, latent_dim)
+
+        self.fc4 = nn.Linear(latent_dim, out_dim)
+        self.fc5 = nn.Linear(out_dim,out_dim)
+        self.fc6 = nn.Linear(out_dim, in_dim)
+
+    def encode(self, x):
+        h1 = F.relu(self.fc1(x))
+        h2 = F.relu(self.fc2(h1))
+        mean = self.fc31(h2)
+        variance = F.softplus(self.fc32(h2)) +1e-8
+        return h2, mean, variance
+
+    def reparameterize(self, mu, var):
+        eps = torch.randn_like(var).to(self.device)
+        z = mu + eps*(var**0.5)
+        return z
+
+    def decode(self, z):
+        h4 = F.relu(self.fc4(z))
+        h5 = F.relu(self.fc5(h4))
+        return (self.fc6(h5)) #remove sigmoid?
+
+def log_bernoulli_with_logits(x, logits):
+  bce = nn.BCEWithLogitsLoss(reduction='none')
+
+  return -bce(input=logits, target=x).sum(-1)
+
+def kl_normal(qm, qv, pm, pv):
+  element_wise = 0.5 * (torch.log(pv) - torch.log(qv) + qv / pv + (qm - pm).pow(2) / pv - 1)
+  kl = element_wise.sum(-1)
+  return kl
+
+class LVAE(nn.Module):
+    def __init__(self):
+        super().__init__()
+        in_dim = 784
+        layer1_dim = 500
+        layer2_dim = 250
+        latent1_dim = 4
+        latent2_dim = 2
+        self.MLP1 = MLP(in_dim, layer1_dim, latent1_dim)
+        self.MLP2 = MLP(layer1_dim, layer2_dim, latent2_dim)
+        self.MLP3 = MLP(latent2_dim, layer1_dim, latent1_dim)
+
+    def encode(self, x):
+        l1, mu_up, var_up = self.MLP1.encode(x)
+
+        _, mu_q1, var_q1, = self.MLP2.encode(l1)
+
+        z1 = self.MLP2.reparameterize(mu_q1, var_q1)
+
+        _, mu_down, var_down = self.MLP3.encode(z1)
+
+        var_q0 = 1/(var_up**(-1)+var_down**(-1))
+        mu_q0 = (var_up**(-1)*mu_up+var_down**(-1)*mu_down)/(var_up**(-1)+var_down**(-1))
+
+        return z1, mu_q0, var_q0, mu_q1, var_q1
+
+    def decode(self, z1):
+        _, mu_p0, var_p0 =  self.MLP3.encode(z1)
+
+        z0 = self.MLP3.reparameterize(mu_p0, var_p0)
+
+        decoded = self.MLP1.decode(z0)
+
+        return decoded, mu_p0, var_p0
+
+    def train_step(self, batch, _):
+        x, _ = batch
+        y, mu, logvar = self(x)
+
+        loss = self.loss(x)
+        return loss
+
+    def forward(self, x):
+        z1, _, _, _, _ = self.encode(x)
+        return self.decode(z1)
+  
+    def negative_elbo_bound(self, x, beta):
+        z_given_x, qmu0, qvar0, qmu1, qvar1 = self.encode(x)
+        decoded_bernoulli_logits, pmu0, pvar0 = self.decode(z_given_x)
+
+        rec = log_bernoulli_with_logits(x, decoded_bernoulli_logits)
+        rec = -torch.mean(rec)
+
+        pm, pv = torch.zeros(qmu1.shape, device=self.device), torch.ones(qvar1.shape, device=self.device)
+
+        kl1 = kl_normal(qmu1, qvar1, pm, pv)
+        kl2 = kl_normal(qmu0, qvar0, pmu0, pvar0)
+        kl = beta*torch.mean(kl1 + kl2)
+
+        nelbo = rec + kl
+        
+        return nelbo, rec, kl, decoded_bernoulli_logits
+  
+    def loss(self, x):
+        beta = 0.1
+        nelbo, _, _, decoded_bernoulli_logits = self.negative_elbo_bound(x, beta)
+        loss = nelbo
+
+        return loss, decoded_bernoulli_logits
 
 
 class VAEBernoulli(VAE):
