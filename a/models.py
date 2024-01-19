@@ -110,7 +110,7 @@ class VAE(pl.LightningModule):
         self.loss(x, y, mu, logvar, prefix="val")
         y = self.mean(y)
 
-        z, _ = self.encode(x.view(-1, 784))
+        z, *_ = self.encode(x.view(-1, 784))
         scatter = plt.scatter(z[:, 1].cpu(), -z[:, 0].cpu(), c=l.cpu(), cmap="tab10", s=2, alpha=0.7)
         plt.legend(*scatter.legend_elements(), loc="upper right")
 
@@ -149,7 +149,7 @@ class VAE(pl.LightningModule):
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3)
     
-class MLP(nn.Module):
+class MLP(pl.LightningModule):
     def __init__(self, in_dim, out_dim, latent_dim):
         super().__init__()
         latent_dim = 2
@@ -185,14 +185,14 @@ class MLP(nn.Module):
 def log_bernoulli_with_logits(x, logits):
   bce = nn.BCEWithLogitsLoss(reduction='none')
 
-  return -bce(input=logits, target=x).sum(-1)
+  return -bce(input=logits, target=x.view(-1, 784)).sum(-1)
 
 def kl_normal(qm, qv, pm, pv):
   element_wise = 0.5 * (torch.log(pv) - torch.log(qv) + qv / pv + (qm - pm).pow(2) / pv - 1)
   kl = element_wise.sum(-1)
   return kl
 
-class LVAE(nn.Module):
+class LVAE(VAE):
     def __init__(self):
         super().__init__()
         in_dim = 784
@@ -227,19 +227,20 @@ class LVAE(nn.Module):
 
         return decoded, mu_p0, var_p0
 
-    def train_step(self, batch, _):
+    def training_step(self, batch, _):
         x, _ = batch
         y, mu, logvar = self(x)
 
-        loss = self.loss(x)
+        loss, _ = self.loss(x)
+        self.log('loss', loss)
         return loss
 
     def forward(self, x):
-        z1, _, _, _, _ = self.encode(x)
+        z1, _, _, _, _ = self.encode(x.view(-1, 784))
         return self.decode(z1)
   
     def negative_elbo_bound(self, x, beta):
-        z_given_x, qmu0, qvar0, qmu1, qvar1 = self.encode(x)
+        z_given_x, qmu0, qvar0, qmu1, qvar1 = self.encode(x.view(-1, 784))
         decoded_bernoulli_logits, pmu0, pvar0 = self.decode(z_given_x)
 
         rec = log_bernoulli_with_logits(x, decoded_bernoulli_logits)
@@ -254,13 +255,23 @@ class LVAE(nn.Module):
         nelbo = rec + kl
         
         return nelbo, rec, kl, decoded_bernoulli_logits
-  
-    def loss(self, x):
+
+    def mean(self, x):
+        if isinstance(x, tuple):
+            y, *_ = x
+            return y
+        else:
+            return x
+
+    def loss(self, x, *args, prefix: str = 'train'):
         beta = 0.1
         nelbo, _, _, decoded_bernoulli_logits = self.negative_elbo_bound(x, beta)
         loss = nelbo
 
         return loss, decoded_bernoulli_logits
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-3)
 
 
 class VAEBernoulli(VAE):
